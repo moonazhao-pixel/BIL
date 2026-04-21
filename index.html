@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Luca's Glasgow Journey - Mobile App</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        /* ================= 1. 基础重置与防原生滚动 ================= */
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Quicksand', sans-serif; overflow: hidden; touch-action: none; background-color: #e5e5f7; }
+        .map-viewport { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+
+        /* ================= 2. 可拖拽的超大地图容器 ================= */
+        .map-pannable { position: absolute; width: 200vw; height: 200vh; top: -50vh; left: -50vw; will-change: transform; cursor: grab; }
+        .map-pannable:active { cursor: grabbing; }
+
+        .bg-map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 0; pointer-events: none; filter: contrast(0.9) brightness(1.1); }
+        .line-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+        .path-line { stroke: #ff6b81; stroke-width: 4; stroke-dasharray: 8 8; transition: opacity 0.3s ease; }
+
+        /* ================= 3. 交互红点 ================= */
+        .node { position: absolute; width: 24px; height: 24px; background-color: #ff6b81; border: 4px solid #fff; border-radius: 50%; cursor: pointer; z-index: 2; transform: translate(-50%, -50%); transition: all 0.3s ease; box-shadow: 0 4px 15px rgba(255, 107, 129, 0.6); }
+        .node.visited { background-color: #2ed573; border-color: #7bed9f; box-shadow: 0 4px 15px rgba(46, 213, 115, 0.6); }
+        .dimmed { opacity: 0.3 !important; }
+
+        #node-1 { top: 35%; left: 60%; } 
+        #node-2 { top: 45%; left: 45%; } 
+        #node-3 { top: 60%; left: 65%; } 
+        #node-4 { top: 75%; left: 50%; } 
+        #node-5 { top: 55%; left: 35%; } 
+
+        .popup { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%) translateY(10px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(5px); border: 2px solid #ff6b81; padding: 15px; width: max-content; max-width: 200px; border-radius: 12px; box-shadow: 0 8px 25px rgba(0,0,0,0.15); color: #2c3e50; opacity: 0; visibility: hidden; transition: all 0.3s ease; pointer-events: none; z-index: 10; }
+        .popup::after { content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); border-width: 8px 8px 0; border-style: solid; border-color: inherit transparent transparent transparent; }
+        .node.active .popup { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+        
+        .popup h4 { margin: 0 0 8px 0; font-weight: 700; font-size: 15px; border-bottom: 2px solid rgba(0,0,0,0.1); padding-bottom: 5px; }
+        .popup p.intro { margin: 0; font-size: 12px; font-weight: 500; line-height: 1.4; color: #7f8c8d; }
+        .node.visited .popup { border-color: #2ed573; color: #1f8a4a; }
+
+        .status-box { margin-top: 10px; padding: 8px; border-radius: 8px; font-size: 12px; text-align: center; transition: all 0.4s ease; cursor: pointer; }
+        .status-box.locked { background: #f1f2f6; color: #a4b0be; border: 1px dashed #ced6e0; font-weight: 700; }
+        .status-box.unlocked { background: #e8f8f5; color: #27ae60; border: 1px solid #2ecc71; text-align: left; line-height: 1.4; font-weight: 500; cursor: default; }
+        .status-box.unlocked strong { color: #1f8a4a; display: block; margin-bottom: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;}
+
+        /* ================= 4. 底部面板 ================= */
+        .bottom-panel { 
+            position: absolute; bottom: 0; left: 0; width: 100%; 
+            box-sizing: border-box; 
+            padding: 20px 20px calc(25px + env(safe-area-inset-bottom)) 20px; 
+            z-index: 20; 
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0.6) 100%); 
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); 
+            border-top: 1px solid rgba(255, 255, 255, 0.8); 
+            border-radius: 30px 30px 0 0; 
+            box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.1); 
+            transition: all 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275); /* 丝滑弹起动画 */
+        }
+
+        .collection-grid { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 15px; }
+        .item-wrapper { position: relative; cursor: pointer; flex: 1; }
+        .item-box { width: 100%; aspect-ratio: 1; background: rgba(255, 255, 255, 0.8); border: 2px solid #fff; border-radius: 12px; display: flex; justify-content: center; align-items: center; font-size: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); transition: transform 0.2s; box-sizing: border-box; }
+        .item-wrapper.locked .item-box { background: rgba(255, 255, 255, 0.3); border: 2px dashed rgba(44, 62, 80, 0.3); color: rgba(44, 62, 80, 0.4); }
+        
+        .item-tooltip { position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%) translateY(10px); background: rgba(255, 255, 255, 0.95); border: 1px solid rgba(0,0,0,0.1); padding: 10px; width: 160px; border-radius: 10px; font-size: 12px; line-height: 1.4; color: #2c3e50; box-shadow: 0 10px 30px rgba(0,0,0,0.15); opacity: 0; visibility: hidden; transition: all 0.3s ease; z-index: 30; pointer-events: none; }
+        .item-tooltip::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); border-width: 6px 6px 0; border-style: solid; border-color: rgba(255,255,255,0.95) transparent transparent transparent; }
+        .item-tooltip.show { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+        .item-tooltip strong { display: block; margin-bottom: 3px; color: #ff6b81; border-bottom: 1px dashed #ccc; padding-bottom: 3px; font-size: 13px;}
+
+        @keyframes unlockPop {
+            0% { transform: scale(1); background: rgba(255,255,255,0.2); border-color: rgba(44,62,80,0.3); }
+            50% { transform: scale(1.2) rotate(5deg); background: #ff6b81; border-color: #ff6b81; color: white; box-shadow: 0 0 20px rgba(255,107,129,0.8); }
+            100% { transform: scale(1) rotate(0); background: rgba(255,255,255,0.8); border: 2px solid #fff; color: inherit; }
+        }
+        .play-unlock .item-box { animation: unlockPop 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; border-style: solid !important; }
+
+        .story-progress { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+        .progress-bar-container { flex: 1; height: 14px; background: rgba(255,255,255,0.6); border: 2px solid #fff; border-radius: 20px; overflow: hidden; }
+        .progress-bar-fill { width: 0%; height: 100%; background: #ff6b81; border-radius: 20px; transition: width 0.4s ease; }
+        .progress-text { font-size: 14px; font-weight: 700; color: #ff6b81; }
+
+        /* ====== ✨ 核心修改：千斤顶式按钮特效 ====== */
+        .trigger-btn { 
+            width: 100%; 
+            background: linear-gradient(135deg, #ff6b81, #ff4757); 
+            color: white; border: none; border-radius: 12px; font-weight: 700; font-size: 15px; 
+            cursor: pointer; 
+            /* 初始状态：完全收缩 */
+            opacity: 0; 
+            max-height: 0; 
+            padding: 0 15px; 
+            margin: 0; 
+            overflow: hidden; 
+            transform: translateY(20px); 
+            transition: all 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+            box-shadow: 0 4px 15px rgba(255, 107, 129, 0.4); 
+            box-sizing: border-box;
+        }
+        .trigger-btn.show { 
+            opacity: 1; 
+            max-height: 60px; 
+            padding: 15px; 
+            margin-top: 20px; 
+            /* 👇 这里的 12vh 会把整个底板往上撑开 12% 的屏幕高度，让按钮刚好位于 1/3 处！ 👇 */
+            margin-bottom: 12vh; 
+            transform: translateY(0); 
+        }
+
+        /* ================= 5. 左上角小标签 ================= */
+        .decorative-blob { position: absolute; top: env(safe-area-inset-top, 20px); left: 20px; width: 90px; height: 80px; z-index: 10; border-radius: 50% 60% 40% 70% / 60% 40% 70% 50%; background: linear-gradient(135deg, rgba(41, 128, 185, 0.4) 0%, rgba(0, 212, 255, 0.15) 100%); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 8px 32px rgba(0, 123, 255, 0.2); overflow: hidden; display: flex; justify-content: center; align-items: center; pointer-events: none; }
+        .blob-pattern { position: absolute; width: 200%; height: 200%; background: repeating-linear-gradient( 45deg, rgba(255, 107, 129, 0.4), rgba(255, 107, 129, 0.4) 10px, transparent 10px, transparent 20px ); mix-blend-mode: multiply; opacity: 0.8; transform: rotate(-15deg); }
+        .blob-text { position: relative; z-index: 2; color: #fff; font-weight: 700; font-size: 12px; text-align: center; line-height: 1.1; text-shadow: 0 2px 4px rgba(0,0,0,0.2); transform: rotate(-5deg); }
+
+        /* ================= 6. 结局弹窗手机适配 ================= */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.6); z-index: 100; display: flex; justify-content: center; align-items: center; opacity: 0; visibility: hidden; transition: all 0.4s ease; padding: 20px; box-sizing: border-box;}
+        .modal-overlay.show { opacity: 1; visibility: visible; }
+        .modal-content.white-glass { background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(240, 240, 240, 0.9) 100%); backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 1); width: 100%; max-width: 360px; padding: 30px 20px; position: relative; transform: translateY(30px); transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.2); }
+        .modal-overlay.show .modal-content { transform: translateY(0); }
+        .modal-content h3 { margin: 0 0 15px 0; color: #ff6b81; font-size: 20px; text-align: center; border-bottom: 2px solid rgba(255, 107, 129, 0.3); padding-bottom: 10px; }
+        .modal-content p { font-size: 14px; line-height: 1.6; color: #34495e; text-align: justify; margin: 0 0 20px 0; }
+        .close-btn { position: absolute; top: 10px; right: 15px; background: none; border: none; font-size: 28px; color: #ff6b81; cursor: pointer; padding: 0; }
+        .continue-btn { background: rgba(255, 255, 255, 0.5); border: 2px solid #ddd; color: #7f8c8d; padding: 12px; border-radius: 12px; text-align: center; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; }
+        .continue-btn:hover, .continue-btn:active { background: #e8f8f5; border-color: #2ecc71; color: #27ae60; }
+
+    </style>
+</head>
+<body>
+
+    <div class="map-viewport" id="viewport">
+        <div class="map-pannable" id="pannable">
+            <iframe class="bg-map" src="https://www.openstreetmap.org/export/embed.html?bbox=-4.32,55.84,-4.24,55.89&layer=mapnik"></iframe>
+
+            <svg class="line-overlay">
+                <line class="path-line" x1="60%" y1="35%" x2="45%" y2="45%" />
+                <line class="path-line" x1="45%" y1="45%" x2="65%" y2="60%" />
+                <line class="path-line" x1="65%" y1="60%" x2="50%" y2="75%" />
+                <line class="path-line" x1="50%" y1="75%" x2="35%" y2="55%" />
+            </svg>
+
+            <div class="node" id="node-1" data-index="0">
+                <div class="popup">
+                    <h4>Glasgow Botanic Gardens</h4>
+                    <p class="intro">A peaceful public park famous for its Victorian glasshouses.</p>
+                    <div class="status-box locked">🔒 Tap to Unlock</div>
+                </div>
+            </div>
+            <div class="node" id="node-2" data-index="1">
+                <div class="popup">
+                    <h4>Kelvingrove Museum</h4>
+                    <p class="intro">A stunning museum housing diverse collections of art.</p>
+                    <div class="status-box locked">🔒 Tap to Unlock</div>
+                </div>
+            </div>
+            <div class="node" id="node-3" data-index="2">
+                <div class="popup">
+                    <h4>Taraki Restaurant</h4>
+                    <p class="intro">A cozy local spot known for hearty comfort food.</p>
+                    <div class="status-box locked">🔒 Tap to Unlock</div>
+                </div>
+            </div>
+            <div class="node" id="node-4" data-index="3">
+                <div class="popup">
+                    <h4>Central Station</h4>
+                    <p class="intro">The bustling main railway terminus linking Glasgow.</p>
+                    <div class="status-box locked">🔒 Tap to Unlock</div>
+                </div>
+            </div>
+            <div class="node" id="node-5" data-index="4">
+                <div class="popup">
+                    <h4>Necropolis</h4>
+                    <p class="intro">A historic cemetery offering panoramic city views.</p>
+                    <div class="status-box locked">🔒 Tap to Unlock</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="decorative-blob">
+            <div class="blob-pattern"></div>
+            <div class="blob-text">Memory<br>Archive.</div>
+        </div>
+
+        <aside class="bottom-panel">
+            <div class="collection-grid">
+                <div class="item-wrapper"><div class="item-box">💡</div><div class="item-tooltip"><strong>Vintage Desk Lamp</strong>Used for: 3 yrs<br>It kept me going through late-night essay writing.</div></div>
+                <div class="item-wrapper"><div class="item-box">🫖</div><div class="item-tooltip"><strong>Replica Teapot</strong>Age: Unknown<br>Strictly used for brewing cheap English Breakfast tea.</div></div>
+                <div class="item-wrapper"><div class="item-box">🏺</div><div class="item-tooltip"><strong>Clay Vase</strong>Used for: 1.5 yrs<br>Added a splash of color to Glasgow's rainy season.</div></div>
+                <div class="item-wrapper locked" id="secret-item-1"><div class="item-box">?</div><div class="item-tooltip"><strong>One-way Ticket</strong>Kept for: 2 yrs<br>We were supposed to go, but I watched the sunset alone.</div></div>
+                <div class="item-wrapper locked" id="secret-item-2"><div class="item-box">?</div><div class="item-tooltip"><strong>Film Camera</strong>Kept for: 5 yrs<br>Holds the memory of this city's last heavy snow.</div></div>
+            </div>
+            <div class="story-progress">
+                <div class="progress-bar-container"><div class="progress-bar-fill" id="progress-bar"></div></div>
+                <div class="progress-text" id="progress-text">0/5</div>
+            </div>
+            <button class="trigger-btn" id="trigger-story-btn">Read Luca's Journal</button>
+        </aside>
+    </div>
+
+    <div class="modal-overlay" id="story-modal">
+        <div class="modal-content white-glass">
+            <button class="close-btn" id="close-modal">×</button>
+            <h3>Luca's Story</h3>
+            <p>I've lived in this city for three years. Most of my time was spent rushing to classes, working part-time, and just trying to survive. I rarely stopped to really look at it. The supermarket I usually went to is just around the corner; after 10 PM, it was so empty, feeling like a moment that belonged only to me. That desk lamp by the window accompanied me through many late nights and witnessed the moment I decided to leave. I didn't leave anything important behind, but if you see these, perhaps for a split second, you'll feel that someone once lived in this city just like this.</p>
+            <div class="continue-btn" onclick="alert('Loading the next city story...')">Explore next person's story?</div>
+        </div>
+    </div>
+
+    <script>
+        // ================= 拖拽地图引擎 (Pan & Drag Engine) =================
+        const viewport = document.getElementById('viewport');
+        const pannable = document.getElementById('pannable');
+        
+        let isDragging = false;
+        let startX, startY;
+        let currentX = 0, currentY = 0;
+
+        const getEventCoords = (e) => e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
+
+        const dragStart = (e) => {
+            if(e.target.closest('.node') || e.target.closest('.bottom-panel') || e.target.closest('.decorative-blob')) return;
+            isDragging = true;
+            const coords = getEventCoords(e);
+            startX = coords.x - currentX;
+            startY = coords.y - currentY;
+        };
+
+        const drag = (e) => {
+            if (!isDragging) return;
+            e.preventDefault(); 
+            const coords = getEventCoords(e);
+            
+            let nextX = coords.x - startX;
+            let nextY = coords.y - startY;
+            const limitX = window.innerWidth / 1.5;
+            const limitY = window.innerHeight / 1.5;
+            
+            currentX = Math.max(-limitX, Math.min(limitX, nextX));
+            currentY = Math.max(-limitY, Math.min(limitY, nextY));
+            
+            pannable.style.transform = `translate(${currentX}px, ${currentY}px)`;
+        };
+
+        const dragEnd = () => { isDragging = false; };
+
+        viewport.addEventListener('mousedown', dragStart);
+        viewport.addEventListener('touchstart', dragStart, {passive: false});
+        viewport.addEventListener('mousemove', drag);
+        viewport.addEventListener('touchmove', drag, {passive: false});
+        viewport.addEventListener('mouseup', dragEnd);
+        viewport.addEventListener('mouseleave', dragEnd);
+        viewport.addEventListener('touchend', dragEnd);
+
+        // ================= 物品格子点击展示 =================
+        const itemWrappers = document.querySelectorAll('.item-wrapper');
+        itemWrappers.forEach(wrapper => {
+            wrapper.addEventListener('click', (e) => {
+                if (wrapper.classList.contains('locked')) return;
+                const tooltip = wrapper.querySelector('.item-tooltip');
+                const isShowing = tooltip.classList.contains('show');
+                document.querySelectorAll('.item-tooltip').forEach(tt => tt.classList.remove('show'));
+                if (!isShowing) tooltip.classList.add('show');
+                e.stopPropagation();
+            });
+        });
+
+        viewport.addEventListener('click', (e) => {
+            if(!e.target.closest('.item-wrapper')) {
+                document.querySelectorAll('.item-tooltip').forEach(tt => tt.classList.remove('show'));
+            }
+            if(!e.target.closest('.node')) {
+                document.querySelectorAll('.node').forEach(n => {
+                    n.classList.remove('active');
+                    n.classList.remove('dimmed');
+                });
+                document.querySelectorAll('.path-line').forEach(l => l.classList.remove('dimmed'));
+            }
+        });
+
+        // ================= 节点探索打卡逻辑 =================
+        const nodes = document.querySelectorAll('.node');
+        const lines = document.querySelectorAll('.path-line');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const triggerBtn = document.getElementById('trigger-story-btn');
+        const storyModal = document.getElementById('story-modal');
+        const closeModalBtn = document.getElementById('close-modal');
+
+        let currentProgress = 0; 
+
+        const hiddenMessages = [
+            "I actually forgot my umbrella that day. I hid from the rain here all afternoon and cried secretly.",
+            "The security guard at the museum eventually became my only old friend here.",
+            "The sandwich was actually just okay, but the owner saw I was soaked and gave me a free cup of hot tea.",
+            "I lost my ticket at the station once and sat blankly on a bench for the whole night.",
+            "I shouted my ex's name at the highest point, and finally let it all go."
+        ];
+
+        nodes.forEach(node => {
+            node.addEventListener('click', (e) => {
+                e.stopPropagation();
+                nodes.forEach(n => { n.classList.remove('active'); n.classList.add('dimmed'); });
+                lines.forEach(line => line.classList.add('dimmed'));
+                
+                node.classList.remove('dimmed');
+                node.classList.add('active'); 
+            });
+
+            const statusBox = node.querySelector('.status-box');
+            statusBox.addEventListener('click', (e) => {
+                e.stopPropagation();
+                
+                if (statusBox.classList.contains('locked')) {
+                    node.classList.add('visited');
+                    statusBox.classList.remove('locked');
+                    statusBox.classList.add('unlocked');
+                    
+                    const index = parseInt(node.getAttribute('data-index'));
+                    statusBox.innerHTML = `<strong>✨ Memory Unlocked</strong>${hiddenMessages[index]}`;
+
+                    currentProgress++;
+                    progressText.innerHTML = `${currentProgress}/5`;
+                    progressBar.style.width = `${(currentProgress / 5) * 100}%`;
+                    
+                    if (currentProgress === 5) {
+                        setTimeout(() => {
+                            const secret1 = document.getElementById('secret-item-1');
+                            const secret2 = document.getElementById('secret-item-2');
+                            secret1.classList.remove('locked');
+                            secret1.classList.add('play-unlock');
+                            secret1.querySelector('.item-box').innerHTML = '🎫'; 
+                            setTimeout(() => {
+                                secret2.classList.remove('locked');
+                                secret2.classList.add('play-unlock');
+                                secret2.querySelector('.item-box').innerHTML = '📸'; 
+                            }, 300);
+                        }, 500);
+
+                        // 动画：由于我们在 CSS 里给 .trigger-btn 加了 margin-bottom: 12vh
+                        // 按钮显现时，整个玻璃面板会自动往上滑出屏幕底部 12% 的距离！
+                        setTimeout(() => { triggerBtn.classList.add('show'); }, 1500);
+                    }
+                }
+            });
+        });
+
+        triggerBtn.addEventListener('click', () => storyModal.classList.add('show'));
+        closeModalBtn.addEventListener('click', () => storyModal.classList.remove('show'));
+        storyModal.addEventListener('click', (e) => { if (e.target === storyModal) storyModal.classList.remove('show'); });
+    </script>
+</body>
+</html>
